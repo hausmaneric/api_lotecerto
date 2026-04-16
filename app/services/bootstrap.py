@@ -39,7 +39,12 @@ class BootstrapService:
                 )
             )
 
-        user = db.scalar(select(ApiUser).where(ApiUser.username == settings.default_admin_username))
+        user = db.scalar(
+            select(ApiUser).where(
+                ApiUser.farm_id == "default-farm",
+                ApiUser.username == settings.default_admin_username,
+            )
+        )
         if user is None:
             db.add(
                 ApiUser(

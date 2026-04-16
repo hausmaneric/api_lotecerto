@@ -33,7 +33,7 @@ def on_startup() -> None:
 
 @app.get("/")
 def healthcheck() -> dict[str, str]:
-    return {"status": "ok", "service": app_settings.app_name}
+    return {"status": "ok", "service": 'ok'}
 
 
 @app.get("/health")

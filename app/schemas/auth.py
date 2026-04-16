@@ -2,6 +2,7 @@ from pydantic import BaseModel
 
 
 class LoginRequest(BaseModel):
+    farm_name: str | None = None
     username: str
     password: str
 

@@ -17,8 +17,8 @@ def get_current_user(
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token nao informado")
 
-    username, _ = SecurityService.decode_token(credentials.credentials)
-    user = db.scalar(select(ApiUser).where(ApiUser.username == username, ApiUser.is_active.is_(True)))
+    user_id, _ = SecurityService.decode_token(credentials.credentials)
+    user = db.scalar(select(ApiUser).where(ApiUser.id == user_id, ApiUser.is_active.is_(True)))
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario nao encontrado")
     return user

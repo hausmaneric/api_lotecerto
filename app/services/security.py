@@ -27,9 +27,9 @@ class SecurityService:
         return hmac.compare_digest(candidate, expected)
 
     @staticmethod
-    def create_access_token(username: str) -> str:
+    def create_access_token(user_id: str) -> str:
         expires_at = int((datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)).timestamp())
-        payload = f"{username}:{expires_at}"
+        payload = f"{user_id}:{expires_at}"
         signature = hmac.new(settings.secret_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
         raw = f"{payload}:{signature}"
         return base64.urlsafe_b64encode(raw.encode()).decode()
@@ -38,11 +38,11 @@ class SecurityService:
     def decode_token(token: str) -> tuple[str, int]:
         try:
             raw = base64.urlsafe_b64decode(token.encode()).decode()
-            username, expires_at, signature = raw.split(":", maxsplit=2)
+            user_id, expires_at, signature = raw.split(":", maxsplit=2)
         except Exception as exc:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido") from exc
 
-        payload = f"{username}:{expires_at}"
+        payload = f"{user_id}:{expires_at}"
         expected_signature = hmac.new(settings.secret_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(signature, expected_signature):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Assinatura invalida")
@@ -50,4 +50,4 @@ class SecurityService:
         if int(expires_at) < int(datetime.now(timezone.utc).timestamp()):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expirado")
 
-        return username, int(expires_at)
+        return user_id, int(expires_at)

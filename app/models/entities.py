@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
@@ -92,10 +92,11 @@ class DeletedEntity(Base):
 
 class ApiUser(Base, TimestampMixin):
     __tablename__ = "api_users"
+    __table_args__ = (UniqueConstraint("farm_id", "username", name="uq_api_users_farm_username"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     farm_id: Mapped[str] = mapped_column(ForeignKey("farms.id"), nullable=False, index=True)
-    username: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
     role: Mapped[str] = mapped_column(String(40), nullable=False, default="member")

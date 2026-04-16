@@ -23,7 +23,21 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    user = db.scalar(select(ApiUser).where(ApiUser.username == payload.username, ApiUser.is_active.is_(True)))
+    user_query = (
+        select(ApiUser)
+        .join(Farm, Farm.id == ApiUser.farm_id)
+        .where(ApiUser.username == payload.username, ApiUser.is_active.is_(True))
+    )
+    if payload.farm_name:
+        user_query = user_query.where(Farm.name == payload.farm_name)
+
+    users = db.scalars(user_query).all()
+    if len(users) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Informe a fazenda para entrar com este usuario.",
+        )
+    user = users[0] if users else None
     if user is None or not SecurityService.verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario ou senha invalidos")
 
@@ -31,7 +45,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     if farm is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Fazenda do usuario nao encontrada")
 
-    token = SecurityService.create_access_token(user.username)
+    token = SecurityService.create_access_token(user.id)
     return TokenResponse(
         access_token=token,
         expires_in_minutes=settings.access_token_expire_minutes,
@@ -58,7 +72,12 @@ def me(current_user: ApiUser = Depends(get_current_user), farm: Farm = Depends(g
 def register_farm(payload: RegisterFarmRequest, db: Session = Depends(get_db)) -> TokenResponse:
     if db.get(Farm, payload.farm_id) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Fazenda ja existe")
-    if db.scalar(select(ApiUser).where(ApiUser.username == payload.username)) is not None:
+    if db.scalar(
+        select(ApiUser).where(
+            ApiUser.farm_id == payload.farm_id,
+            ApiUser.username == payload.username,
+        )
+    ) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Usuario ja existe")
 
     now = DateTimeService.now_iso()
@@ -94,7 +113,7 @@ def register_farm(payload: RegisterFarmRequest, db: Session = Depends(get_db)) -
     db.add(app_settings)
     db.commit()
 
-    token = SecurityService.create_access_token(user.username)
+    token = SecurityService.create_access_token(user.id)
     return TokenResponse(
         access_token=token,
         expires_in_minutes=settings.access_token_expire_minutes,
@@ -114,7 +133,12 @@ def create_farm_user(
 ) -> CurrentUserResponse:
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario sem permissao para criar novos acessos")
-    if db.scalar(select(ApiUser).where(ApiUser.username == payload.username)) is not None:
+    if db.scalar(
+        select(ApiUser).where(
+            ApiUser.farm_id == farm.id,
+            ApiUser.username == payload.username,
+        )
+    ) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Usuario ja existe")
 
     now = DateTimeService.now_iso()

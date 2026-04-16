@@ -37,6 +37,7 @@ class SchemaService:
                     "role",
                     "ALTER TABLE api_users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'",
                 )
+                SchemaService._ensure_api_users_scope(connection)
 
             if "vaccines" in tables:
                 SchemaService._add_column_if_missing(
@@ -133,3 +134,74 @@ class SchemaService:
         }
         if column_name not in columns:
             connection.execute(text(ddl))
+
+    @staticmethod
+    def _ensure_api_users_scope(connection) -> None:
+        indexes = list(connection.execute(text("PRAGMA index_list(api_users)")))
+        has_scoped_unique = False
+        rebuild_required = False
+
+        for index in indexes:
+            index_name = index[1]
+            is_unique = index[2] == 1
+            columns = [
+                row[2]
+                for row in connection.execute(text(f"PRAGMA index_info('{index_name}')"))
+            ]
+            if is_unique and columns == ["farm_id", "username"]:
+                has_scoped_unique = True
+            if is_unique and columns == ["username"]:
+                rebuild_required = True
+
+        if rebuild_required:
+            connection.execute(text("PRAGMA foreign_keys = OFF"))
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE api_users_new (
+                      id VARCHAR(64) PRIMARY KEY,
+                      farm_id VARCHAR NOT NULL,
+                      username VARCHAR(80) NOT NULL,
+                      password_hash VARCHAR(256) NOT NULL,
+                      display_name VARCHAR(120) NOT NULL,
+                      role VARCHAR(40) NOT NULL DEFAULT 'member',
+                      is_active BOOLEAN NOT NULL DEFAULT 1,
+                      created_at VARCHAR(32) NOT NULL,
+                      updated_at VARCHAR(32),
+                      FOREIGN KEY(farm_id) REFERENCES farms (id)
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO api_users_new (
+                      id, farm_id, username, password_hash, display_name,
+                      role, is_active, created_at, updated_at
+                    )
+                    SELECT
+                      id, farm_id, username, password_hash, display_name,
+                      role, is_active, created_at, updated_at
+                    FROM api_users
+                    """
+                )
+            )
+            connection.execute(text("DROP TABLE api_users"))
+            connection.execute(text("ALTER TABLE api_users_new RENAME TO api_users"))
+            connection.execute(text("CREATE INDEX ix_api_users_farm_id ON api_users (farm_id)"))
+            connection.execute(text("CREATE INDEX ix_api_users_username ON api_users (username)"))
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX uq_api_users_farm_username ON api_users (farm_id, username)"
+                )
+            )
+            connection.execute(text("PRAGMA foreign_keys = ON"))
+            return
+
+        if not has_scoped_unique:
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_api_users_farm_username ON api_users (farm_id, username)"
+                )
+            )

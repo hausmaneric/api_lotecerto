@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+lotecerto_api.db
+*.sqlite3
+.pytest_cache/
+.mypy_cache/

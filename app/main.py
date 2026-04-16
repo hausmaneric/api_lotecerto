@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 
 from app.api.routes import auth, dashboard, farms, lots, settings, sync, vaccinations, vaccines
@@ -6,15 +8,27 @@ from app.db.database import Base, SessionLocal, engine
 from app.services.bootstrap import BootstrapService
 from app.services.schema_service import SchemaService
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title=app_settings.app_name, version="1.0.0")
 
 
 @app.on_event("startup")
 def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
-    SchemaService.ensure_schema(engine)
-    with SessionLocal() as db:
-        BootstrapService.ensure_defaults(db)
+    logger.info("Starting LoteCerto API bootstrap")
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Base metadata ensured")
+
+        SchemaService.ensure_schema(engine)
+        logger.info("Schema migration ensured")
+
+        with SessionLocal() as db:
+            BootstrapService.ensure_defaults(db)
+        logger.info("Default data ensured")
+    except Exception:
+        logger.exception("Startup bootstrap failed")
+        raise
 
 
 @app.get("/")

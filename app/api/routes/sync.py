@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, Query
+from fastapi import HTTPException, status
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_farm, get_current_user
@@ -9,6 +11,19 @@ from app.schemas.dashboard import PushRequest, PushResponse, SyncResponse
 from app.services.datetime_service import DateTimeService
 
 router = APIRouter(prefix="/sync", tags=["sync"], dependencies=[Depends(get_current_user)])
+
+
+def _raise_sync_database_error(exc: Exception) -> None:
+    if isinstance(exc, OperationalError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Banco de dados indisponivel durante a sincronizacao.",
+        ) from exc
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Conflito de dados durante a sincronizacao.",
+    ) from exc
 
 
 def _serialize_public(model) -> dict:
@@ -94,26 +109,29 @@ def pull_sync(
     farm: Farm = Depends(get_current_farm),
     db: Session = Depends(get_db),
 ) -> SyncResponse:
-    records_query = (
-        select(VaccinationRecord)
-        .join(VaccinationRecord.lot)
-        .join(VaccinationRecord.vaccine)
-        .where(Lot.farm_id == farm.id, Vaccine.farm_id == farm.id)
-    )
-    if updated_since:
-        records_query = records_query.where(
-            or_(VaccinationRecord.updated_at >= updated_since, VaccinationRecord.created_at >= updated_since)
+    try:
+        records_query = (
+            select(VaccinationRecord)
+            .join(VaccinationRecord.lot)
+            .join(VaccinationRecord.vaccine)
+            .where(Lot.farm_id == farm.id, Vaccine.farm_id == farm.id)
         )
+        if updated_since:
+            records_query = records_query.where(
+                or_(VaccinationRecord.updated_at >= updated_since, VaccinationRecord.created_at >= updated_since)
+            )
 
-    return SyncResponse(
-        farms=[_serialize_public(farm)],
-        lots=[_serialize_public(item) for item in db.scalars(_updated_query(Lot, updated_since, farm.id)).all()],
-        vaccines=[_serialize_public(item) for item in db.scalars(_updated_query(Vaccine, updated_since, farm.id)).all()],
-        vaccination_records=[_serialize_public(item) for item in db.scalars(records_query).all()],
-        settings=[_serialize_public(item) for item in db.scalars(_updated_query(AppSettings, updated_since, farm.id)).all()],
-        deleted_entities=[_serialize_public(item) for item in db.scalars(_updated_query(DeletedEntity, updated_since, farm.id)).all()],
-        server_time=DateTimeService.now_iso(),
-    )
+        return SyncResponse(
+            farms=[_serialize_public(farm)],
+            lots=[_serialize_public(item) for item in db.scalars(_updated_query(Lot, updated_since, farm.id)).all()],
+            vaccines=[_serialize_public(item) for item in db.scalars(_updated_query(Vaccine, updated_since, farm.id)).all()],
+            vaccination_records=[_serialize_public(item) for item in db.scalars(records_query).all()],
+            settings=[_serialize_public(item) for item in db.scalars(_updated_query(AppSettings, updated_since, farm.id)).all()],
+            deleted_entities=[_serialize_public(item) for item in db.scalars(_updated_query(DeletedEntity, updated_since, farm.id)).all()],
+            server_time=DateTimeService.now_iso(),
+        )
+    except (OperationalError, IntegrityError) as exc:
+        _raise_sync_database_error(exc)
 
 
 @router.post("/push", response_model=PushResponse)
@@ -122,20 +140,24 @@ def push_sync(
     farm: Farm = Depends(get_current_farm),
     db: Session = Depends(get_db),
 ) -> PushResponse:
-    farms_received = _upsert_rows(db, Farm, payload.farms, farm.id)
-    lots_received = _upsert_rows(db, Lot, payload.lots, farm.id)
-    vaccines_received = _upsert_rows(db, Vaccine, payload.vaccines, farm.id)
-    vaccination_records_received = _upsert_rows(db, VaccinationRecord, payload.vaccination_records, farm.id)
-    settings_received = _upsert_rows(db, AppSettings, payload.settings, farm.id)
-    deleted_entities_received = _apply_deleted_entities(db, payload.deleted_entities, farm.id)
-    db.commit()
+    try:
+        farms_received = _upsert_rows(db, Farm, payload.farms, farm.id)
+        lots_received = _upsert_rows(db, Lot, payload.lots, farm.id)
+        vaccines_received = _upsert_rows(db, Vaccine, payload.vaccines, farm.id)
+        vaccination_records_received = _upsert_rows(db, VaccinationRecord, payload.vaccination_records, farm.id)
+        settings_received = _upsert_rows(db, AppSettings, payload.settings, farm.id)
+        deleted_entities_received = _apply_deleted_entities(db, payload.deleted_entities, farm.id)
+        db.commit()
 
-    return PushResponse(
-        farms_received=farms_received,
-        lots_received=lots_received,
-        vaccines_received=vaccines_received,
-        vaccination_records_received=vaccination_records_received,
-        settings_received=settings_received,
-        deleted_entities_received=deleted_entities_received,
-        server_time=DateTimeService.now_iso(),
-    )
+        return PushResponse(
+            farms_received=farms_received,
+            lots_received=lots_received,
+            vaccines_received=vaccines_received,
+            vaccination_records_received=vaccination_records_received,
+            settings_received=settings_received,
+            deleted_entities_received=deleted_entities_received,
+            server_time=DateTimeService.now_iso(),
+        )
+    except (OperationalError, IntegrityError) as exc:
+        db.rollback()
+        _raise_sync_database_error(exc)

@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import OperationalError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,17 +22,28 @@ from app.services.security import SecurityService
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _raise_database_unavailable(exc: OperationalError) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Banco de dados indisponivel no momento.",
+    ) from exc
+
+
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    user_query = (
-        select(ApiUser)
-        .join(Farm, Farm.id == ApiUser.farm_id)
-        .where(ApiUser.username == payload.username, ApiUser.is_active.is_(True))
-    )
-    if payload.farm_name:
-        user_query = user_query.where(Farm.name == payload.farm_name)
+    try:
+        user_query = (
+            select(ApiUser)
+            .join(Farm, Farm.id == ApiUser.farm_id)
+            .where(ApiUser.username == payload.username, ApiUser.is_active.is_(True))
+        )
+        if payload.farm_name:
+            user_query = user_query.where(Farm.name == payload.farm_name)
 
-    users = db.scalars(user_query).all()
+        users = db.scalars(user_query).all()
+    except OperationalError as exc:
+        _raise_database_unavailable(exc)
+
     if len(users) > 1:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -41,7 +53,11 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     if user is None or not SecurityService.verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario ou senha invalidos")
 
-    farm = db.get(Farm, user.farm_id)
+    try:
+        farm = db.get(Farm, user.farm_id)
+    except OperationalError as exc:
+        _raise_database_unavailable(exc)
+
     if farm is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Fazenda do usuario nao encontrada")
 
@@ -70,15 +86,18 @@ def me(current_user: ApiUser = Depends(get_current_user), farm: Farm = Depends(g
 
 @router.post("/register-farm", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register_farm(payload: RegisterFarmRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    if db.get(Farm, payload.farm_id) is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Fazenda ja existe")
-    if db.scalar(
-        select(ApiUser).where(
-            ApiUser.farm_id == payload.farm_id,
-            ApiUser.username == payload.username,
-        )
-    ) is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Usuario ja existe")
+    try:
+        if db.get(Farm, payload.farm_id) is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Fazenda ja existe")
+        if db.scalar(
+            select(ApiUser).where(
+                ApiUser.farm_id == payload.farm_id,
+                ApiUser.username == payload.username,
+            )
+        ) is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Usuario ja existe")
+    except OperationalError as exc:
+        _raise_database_unavailable(exc)
 
     now = DateTimeService.now_iso()
     farm = Farm(
@@ -108,10 +127,14 @@ def register_farm(payload: RegisterFarmRequest, db: Session = Depends(get_db)) -
         created_at=now,
         updated_at=None,
     )
-    db.add(farm)
-    db.add(user)
-    db.add(app_settings)
-    db.commit()
+    try:
+        db.add(farm)
+        db.add(user)
+        db.add(app_settings)
+        db.commit()
+    except OperationalError as exc:
+        db.rollback()
+        _raise_database_unavailable(exc)
 
     token = SecurityService.create_access_token(user.id)
     return TokenResponse(
@@ -133,13 +156,16 @@ def create_farm_user(
 ) -> CurrentUserResponse:
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario sem permissao para criar novos acessos")
-    if db.scalar(
-        select(ApiUser).where(
-            ApiUser.farm_id == farm.id,
-            ApiUser.username == payload.username,
-        )
-    ) is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Usuario ja existe")
+    try:
+        if db.scalar(
+            select(ApiUser).where(
+                ApiUser.farm_id == farm.id,
+                ApiUser.username == payload.username,
+            )
+        ) is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Usuario ja existe")
+    except OperationalError as exc:
+        _raise_database_unavailable(exc)
 
     now = DateTimeService.now_iso()
     user = ApiUser(
@@ -153,9 +179,13 @@ def create_farm_user(
         created_at=now,
         updated_at=None,
     )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except OperationalError as exc:
+        db.rollback()
+        _raise_database_unavailable(exc)
 
     return CurrentUserResponse(
         id=user.id,

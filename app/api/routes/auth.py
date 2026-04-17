@@ -1,8 +1,8 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import OperationalError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_farm, get_current_user
@@ -26,6 +26,23 @@ def _raise_database_unavailable(exc: OperationalError) -> None:
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="Banco de dados indisponivel no momento.",
+    ) from exc
+
+
+def _raise_integrity_conflict(exc: IntegrityError) -> None:
+    message = str(exc.orig).lower() if getattr(exc, "orig", None) is not None else str(exc).lower()
+    detail = "Conflito de dados ao salvar."
+
+    if "api_users" in message and "username" in message:
+        detail = "Usuario ja existe nesta fazenda."
+    elif "farms" in message and "id" in message:
+        detail = "Fazenda ja existe."
+    elif "app_settings" in message and "id" in message:
+        detail = "Configuracoes da fazenda ja existem."
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=detail,
     ) from exc
 
 
@@ -135,6 +152,9 @@ def register_farm(payload: RegisterFarmRequest, db: Session = Depends(get_db)) -
     except OperationalError as exc:
         db.rollback()
         _raise_database_unavailable(exc)
+    except IntegrityError as exc:
+        db.rollback()
+        _raise_integrity_conflict(exc)
 
     token = SecurityService.create_access_token(user.id)
     return TokenResponse(
@@ -186,6 +206,9 @@ def create_farm_user(
     except OperationalError as exc:
         db.rollback()
         _raise_database_unavailable(exc)
+    except IntegrityError as exc:
+        db.rollback()
+        _raise_integrity_conflict(exc)
 
     return CurrentUserResponse(
         id=user.id,

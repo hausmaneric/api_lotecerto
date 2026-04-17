@@ -31,13 +31,19 @@ def _raise_database_unavailable(exc: OperationalError) -> None:
 
 def _raise_integrity_conflict(exc: IntegrityError) -> None:
     message = str(exc.orig).lower() if getattr(exc, "orig", None) is not None else str(exc).lower()
-    detail = "Conflito de dados ao salvar."
+    detail = f"Conflito de dados ao salvar: {message}"
 
     if "api_users" in message and "username" in message:
         detail = "Usuario ja existe nesta fazenda."
     elif "farms" in message and "id" in message:
         detail = "Fazenda ja existe."
     elif "app_settings" in message and "id" in message:
+        detail = "Configuracoes da fazenda ja existem."
+    elif "unique constraint failed: api_users.username" in message:
+        detail = "Usuario ja existe no banco atual da API."
+    elif "unique constraint failed: api_users.farm_id, api_users.username" in message:
+        detail = "Usuario ja existe nesta fazenda."
+    elif "unique constraint failed: app_settings.id" in message:
         detail = "Configuracoes da fazenda ja existem."
 
     raise HTTPException(

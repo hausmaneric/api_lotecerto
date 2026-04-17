@@ -152,6 +152,7 @@ def register_farm(payload: RegisterFarmRequest, db: Session = Depends(get_db)) -
     )
     try:
         db.add(farm)
+        db.flush()
         db.add(user)
         db.add(app_settings)
         db.commit()

@@ -13,14 +13,14 @@ class RegisterFarmRequest(BaseModel):
     owner_name: str
     username: str
     password: str
-    display_name: str
+    display_name: str | None = None
 
 
 class CreateFarmUserRequest(BaseModel):
     user_id: str
     username: str
     password: str
-    display_name: str
+    display_name: str | None = None
     role: str = "member"
 
 
